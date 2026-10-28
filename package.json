@@ -1,7 +1,7 @@
 {
   "name": "dsh-tide-badge",
-  "version": "0.2.3",
-  "description": "DSH 输入框下方的计费时段与余额药丸：常显账户余额与本次对话花费（余额差值记账）、峰价/谷价（含中国法定节假日与周末规则）、下一次切换倒计时（桌面端账号登录态优先，API Key 兜底）。",
+  "version": "0.3.0",
+  "description": "DSH 输入框下方的计费时段与余额药丸：常显账户余额与本次对话花费（按会话 token 用量 × 官方价目表估算）、峰价/谷价（含中国法定节假日与周末规则）、下一次切换倒计时（桌面端账号登录态优先，API Key 兜底）。",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -18,17 +18,16 @@
     "lib",
     "cordis.patch.yml",
     "README.md",
-    "LICENSE",
-    "assets"
+    "LICENSE"
   ],
   "engines": {
     "node": ">=20"
   },
   "scripts": {
     "build": "node lib/build.mjs",
-    "test": "node lib/season.test.mjs",
-    "check": "node lib/build.mjs && node --check lib/client.js && node --check lib/index.js && node --check lib/season.mjs && node --check lib/holidays.mjs",
-    "prepublishOnly": "npm run check"
+    "test": "node lib/season.test.mjs && node lib/pricing.test.mjs",
+    "test:client": "node tools/client-smoke.mjs",
+    "check": "node lib/build.mjs && node --check lib/client.js && node --check lib/index.js && node --check lib/season.mjs && node --check lib/holidays.mjs && node --check lib/pricing.mjs && node lib/season.test.mjs && node lib/pricing.test.mjs && node tools/client-smoke.mjs"
   },
   "keywords": [
     "dsh",
@@ -40,20 +39,27 @@
     "valley",
     "holiday",
     "balance",
+    "token-usage",
     "composer",
     "峰谷",
     "余额",
     "计费"
   ],
   "license": "MIT",
-  "author": "xiangrikuibaize",
+  "author": "errolleefin (modifications)",
+  "contributors": [
+    {
+      "name": "xiangrikuibaize",
+      "url": "https://github.com/xiangrikuibaize"
+    }
+  ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/xiangrikuibaize/dsh-tide-badge.git"
+    "url": "git+https://github.com/errolleefin/dsh-tide-badge.git"
   },
-  "homepage": "https://github.com/xiangrikuibaize/dsh-tide-badge#readme",
+  "homepage": "https://github.com/errolleefin/dsh-tide-badge#readme",
   "bugs": {
-    "url": "https://github.com/xiangrikuibaize/dsh-tide-badge/issues"
+    "url": "https://github.com/errolleefin/dsh-tide-badge/issues"
   },
   "dsh": {
     "bundle": {
@@ -69,7 +75,7 @@
   "dshhub": {
     "schemaVersion": 1,
     "displayName": "dsh-tide-badge",
-    "summary": "输入框下方的峰谷计费与余额药丸：常显账户余额与本次对话花费、峰价/谷价（含法定节假日与周末规则）、切换倒计时（桌面端账号优先）。",
+    "summary": "输入框下方的峰谷计费与余额药丸：常显账户余额与本次对话花费（按会话 token 用量 × 官方价目表）、峰价/谷价（含法定节假日与周末规则）、切换倒计时（桌面端账号优先）。",
     "categories": [
       "用量与计费",
       "UI 增强"

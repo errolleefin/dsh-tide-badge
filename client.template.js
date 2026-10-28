@@ -1,12 +1,13 @@
 /**
  * dsh-tide-badge —— 浏览器半边（模板）
  *
- * 由 build.mjs 把 lib/season.mjs 内联到下面的 SEASON 标记处，生成最终的
+ * 由 build.mjs 把 lib/season.mjs 与 lib/pricing.mjs 内联到下面的标记处，生成最终的
  * lib/client.js。这样前端与宿主**共用同一份峰谷与节假日判定源码**，前端不必
- * 自己维护节假日表，也不会出现两端算出的切换点不一致。
+ * 自己维护节假日表，也不会出现两端算出的切换点不一致；价目表也只有一处。
  *
  * 形态沿用 billing-badge：一枚小药丸挂在输入框下方的原生统计行里（"缓存命中"
- * 那一排），点击展开面板。数据来自宿主 /plugins/tide-badge/state 单一路由。
+ * 那一排），点击展开面板。数据来自宿主 /plugins/tide-badge/state 单一路由，
+ * 「本次」则来自 DSH 自带的**会话级** `tokenUsage` 投影（见下面 mountChip 的注释）。
  */
 window.__ModuleLoader__.load({
 	id: "dsh-tide-badge",
@@ -18,6 +19,10 @@ window.__ModuleLoader__.load({
 		// >>> tide-badge:season（由 build.mjs 从 lib/season.mjs 内联，请勿手改） >>>
 		/* SEASON_INLINE */
 		// <<< tide-badge:season <<<
+
+		// >>> tide-badge:pricing（由 build.mjs 从 lib/pricing.mjs 内联，请勿手改） >>>
+		/* PRICING_INLINE */
+		// <<< tide-badge:pricing <<<
 
 		const STATE_URL = "/plugins/tide-badge/state";
 		const TICK_MS = 1000;
@@ -106,6 +111,18 @@ window.__ModuleLoader__.load({
 			return `${text} ${currency || ""}`.trim();
 		}
 
+		/**
+		 * token 数量的千分位写法（面板里逐桶展示用量）。
+		 *
+		 * 固定用 en-US 的逗号分组：界面语言是中文时 `12,345` 仍然比 `1.2345万`
+		 * 更容易和原生「缓存命中」药丸的数字对齐。
+		 */
+		function formatTokens(value) {
+			const n = Number(value);
+			if (!Number.isFinite(n) || n < 0) return "--";
+			return Math.round(n).toLocaleString("en-US");
+		}
+
 		/** 宿主下发的节假日清单只应用一次，避免每次渲染都重建 Set。 */
 		let holidays = null;
 
@@ -136,8 +153,11 @@ window.__ModuleLoader__.load({
 		 *
 		 * 有时段数据就用宿主下发的（与宿主时刻严格一致），否则用共用的 season
 		 * 源码本地算一份（节假日清单已由 setHolidays 注入）。
+		 *
+		 * @param {object} state 宿主 /plugins/tide-badge/state 的响应
+		 * @param {object} [cost] costView()，缺省时只显示时段与余额
 		 */
-		function panelBody(state) {
+		function panelBody(state, cost) {
 			const now = new Date();
 			const season = (state && state.season) || describePhase(now);
 			const bal = state && state.balance;
@@ -153,6 +173,22 @@ window.__ModuleLoader__.load({
 					: `${season.countdown}后` + (flip === null ? "" : `，${beijingClock(flip).weekday} ${beijingClock(flip).clock}（北京）`),
 			]);
 			rows.push(["北京时间", `${season.beijing.weekday} ${season.beijing.clock}`]);
+
+			if (cost !== undefined && cost !== null) {
+				if (cost.available === true) {
+					rows.push(["本次花费", formatMoney(cost.amount, "CNY") + "（按价目表估算）"]);
+					if (cost.buckets !== null && cost.buckets !== undefined) {
+						rows.push(["未命中输入", formatTokens(cost.buckets.uncachedInputTokens)]);
+						rows.push(["缓存命中输入", formatTokens(cost.buckets.cacheReadTokens)]);
+						if (Number(cost.buckets.cacheWriteTokens) > 0) {
+							rows.push(["缓存写入", formatTokens(cost.buckets.cacheWriteTokens)]);
+						}
+						rows.push(["输出", formatTokens(cost.buckets.outputTokens)]);
+					}
+				} else {
+					rows.push(["本次花费", "等待用量投影…", "muted"]);
+				}
+			}
 
 			if (bal && bal.ok) {
 				rows.push(["账户余额", formatMoney(bal.total, bal.currency) + (bal.currency ? ` ${bal.currency}` : "")]);
@@ -187,7 +223,7 @@ window.__ModuleLoader__.load({
 		}
 
 		/** 挂载芯片与面板。 */
-		function mountChip(row) {
+		function mountChip(row, initialSessionId) {
 			injectCss();
 
 			const chip = document.createElement("button");
@@ -213,111 +249,118 @@ window.__ModuleLoader__.load({
 			let tick = 0;
 
 			/**
-			 * 本次对话花费 —— 用**余额差值**记账。
+			 * 本次对话花费 —— 按**会话级 token 用量 × 官方价目表**记账（方案 A）。
 			 *
-			 * 为什么用差值而不是 token×单价：余额减少是**真实扣费**，把缓存命中、
-			 * 思考 token、峰谷价这些都交给账单自己去体现，不必维护价目表，也不会
-			 * 出现"算出 ¥0.42、实际扣 ¥0.51"的偏差。
+			 * 为什么不再用余额差值：余额是**账户级**读数，同一账号的其他对话、其他
+			 * API Key、手机 App 都扣同一个钱包。用它推导「本次」必然串账 —— 实测
+			 * 8 个对话合计 ¥17.22，而账户实际只掉了 ¥5.25（见 issue-tide-badge.md）。
 			 *
-			 * 记账节奏搭在既有的"对话停止一分钟后刷新余额"上（IDLE_REFRESH_MS）：
-			 * 每次拿到新余额就与基准做差累加。于是
-			 *   · 对话进行中 → 显示已结算的累计值
-			 *   · 一轮结束满一分钟后 → 该轮花费被计入
-			 *   · 新对话 → 基准即当前余额 → ¥0
+			 * 现在改成读 DSH 自带的 `tokenUsage` 会话投影（provider 每次响应自报的
+			 * usage，按会话累计；原生「缓存命中」药丸读的也是它）：
+			 *   · 归属由 sessionId 决定，别的对话 / 别的 API 花多少都进不来；
+			 *   · 投影给的是**累计值**，所以每次拿到新值就与账本里的上一份快照逐桶
+			 *     做差，再按**当时的**峰/谷档位计价累加 —— 跨 09:00 / 12:00 /
+			 *     14:00 / 18:00 边界的轮次按观察时刻计价，最多错一轮，方向可预期；
+			 *   · 首次见到一个会话（没有账本行）时，把它的累计用量整体按当前档位
+			 *     计价：「本次」= 这个对话到目前为止的花费，而不是从 0 重新开始。
+			 *     代价是重开旧会话时，它的历史轮次按此刻的档位估算。
 			 *
-			 * 两个已知边界：
-			 *   · 余额是**账户级**读数，若同一账号在别处（手机 App、另一个 DSH）
-			 *     同时消耗，那部分会被算进来。
-			 *   · 充值会让余额上升，此时不做负向记账（只累加正差值）。
+			 * 账本按 sessionId 分开存；取不到 id 就**不记账**（宁可不显示），
+			 * 绝不退回共用一条 "default" 账 —— 那正是同一笔钱被记多遍的来源。
 			 */
-			const LEDGER_KEY = "dsh-tide-badge/session-cost";
-			/** 金额用整数单位累加，避免浮点累加误差。 */
-			const MONEY_SCALE = 1e8;
-			const toUnits = (v) => {
-				const n = Number(v);
-				if (!Number.isFinite(n)) return null;
-				const u = Math.round(n * MONEY_SCALE);
-				return Number.isSafeInteger(u) ? u : null;
+			const LEDGER_KEY = "dsh-tide-badge/session-cost/v2";
+			/** 旧版差值法账本：口径错误且已无人读取，升级时清掉。 */
+			const LEGACY_LEDGER_KEY = "dsh-tide-badge/session-cost";
+
+			/** 当前对话 id；拿不到就是 null（不记账、不显示金额）。 */
+			let sessionId = typeof initialSessionId === "string" && initialSessionId !== "" ? initialSessionId : null;
+
+			const loadLedger = () => {
+				const out = {};
+				try {
+					const raw = window.localStorage.getItem(LEDGER_KEY);
+					const parsed = raw === null ? null : JSON.parse(raw);
+					const sessions = parsed !== null && typeof parsed === "object" ? parsed.sessions : null;
+					if (sessions === null || typeof sessions !== "object") return out;
+					for (const [id, row] of Object.entries(sessions)) {
+						if (id === "" || row === null || typeof row !== "object") continue;
+						if (!Number.isSafeInteger(row.costUnits) || row.costUnits < 0) continue;
+						const buckets = normaliseBuckets(row.buckets);
+						if (buckets === null) continue;
+						out[id] = { costUnits: row.costUnits, buckets };
+					}
+				} catch (err) {
+					/* 读不到就当新账本 */
+				}
+				return out;
 			};
 
-			let ledger = {};
-			try {
-				const raw = window.localStorage.getItem(LEDGER_KEY);
-				const parsed = raw === null ? null : JSON.parse(raw);
-				if (parsed !== null && typeof parsed === "object") ledger = parsed;
-			} catch (err) {
-				/* 读不到就当新账本 */
-			}
+			let ledger = loadLedger();
 			const saveLedger = () => {
 				try {
-					window.localStorage.setItem(LEDGER_KEY, JSON.stringify(ledger));
+					window.localStorage.setItem(LEDGER_KEY, JSON.stringify({ v: 2, sessions: ledger }));
 				} catch (err) {
 					/* 存不下不影响本次显示 */
 				}
 			};
+			try {
+				window.localStorage.removeItem(LEGACY_LEDGER_KEY);
+			} catch (err) {
+				/* 旧账本删不掉也无所谓 */
+			}
 
-			/** 当前对话 id。取不到时退回 "default"（全局单条账）。 */
-			const sessionKey = () => {
-				try {
-					const ctx = typeof globalThis !== "undefined" ? globalThis.__dshTideBadgeCtx : null;
-					const sessions = ctx && typeof ctx.get === "function" ? ctx.get("sessions") : null;
-					const list = sessions && sessions.list;
-					if (!list || typeof list.getSnapshot !== "function") return "default";
-					const snap = list.getSnapshot();
-					if (!snap || typeof snap !== "object") return "default";
-					if (typeof snap.current === "string" && snap.current !== "") return snap.current;
-					const byId = snap.byId;
-					if (byId && typeof byId === "object") {
-						// 没有显式 current 时，用界面自己的口径：主视图持有的那个会话。
-						for (const [id, row] of Object.entries(byId)) {
-							if (row && row.retainedBy && (row.retainedBy.mainView ?? 0) > 0) return id;
-						}
-					}
-					return "default";
-				} catch (err) {
-					return "default";
-				}
+			/** 本次对话已累计的花费（元）；未知时 null。 */
+			const sessionCost = () => {
+				if (sessionId === null) return null;
+				const row = ledger[sessionId];
+				return row === undefined ? 0 : row.costUnits / MONEY_SCALE;
 			};
 
-			/** 本次对话已累计的花费（元）。 */
-			const sessionCost = () => {
-				const row = ledger[sessionKey()];
-				const units = row && Number.isFinite(row.costUnits) ? row.costUnits : 0;
-				return units / MONEY_SCALE;
+			/**
+			 * 把一次新的用量快照记进账本。
+			 *
+			 * 计价与「不重复记」的规则都在 nextCostRow 里（pricing.mjs，有单测）：
+			 * 账本一行只属于一个会话，所以这里不可能把别的对话的消耗算进来。
+			 *
+			 * @param {string} id 会话 id
+			 * @param {object} raw `tokenUsage` 投影的四桶视图
+			 */
+			const observeUsage = (id, raw) => {
+				const buckets = normaliseBuckets(raw);
+				if (buckets === null) return;
+				const previous = ledger[id];
+				if (previous !== undefined) {
+					const delta = deltaBuckets(buckets, previous.buckets);
+					// 用量没变（同一次响应被重复读取）：不写盘，免得每秒刷新都落一次 localStorage。
+					if (delta !== null && isEmptyBuckets(delta)) return;
+				}
+				const peak = describePhase(new Date()).peak;
+				ledger[id] = nextCostRow(previous === undefined ? null : previous, buckets, peak);
+				saveLedger();
+			};
+
+			/** 面板与芯片共用的花费视图。 */
+			const costView = () => {
+				const row = sessionId === null ? undefined : ledger[sessionId];
+				return {
+					available: row !== undefined,
+					amount: row === undefined ? 0 : row.costUnits / MONEY_SCALE,
+					buckets: row === undefined ? null : row.buckets,
+					peak: describePhase(new Date()).peak,
+				};
 			};
 
 			/**
 			 * 芯片上「本次 <金额>」那一段的文案。
 			 *
-			 * 币种优先跟宿主下发的余额走（账本里只存数字，不存币种）；余额取不到
-			 * 时回落到 CNY —— 这是本项目唯一支持的记账币种，好过把整段藏起来。
+			 * 金额一律人民币：价目表就是人民币，与余额币种无关 —— 旧实现拿余额
+			 * 币种格式化累计值，来源一换就会给人民币数字标上 $。
 			 * 永远返回非空串，调用方据此常显 `本次 0¥`。
 			 */
 			const costText = () => {
-				const bal = state && state.balance;
-				return "本次 " + formatMoney(sessionCost(), (bal && bal.currency) || "CNY");
-			};
-
-			/**
-			 * 用一次新的余额读数记账。调用点与余额刷新同步（停止后满一分钟）。
-			 * @param {number} total 余额读数
-			 */
-			const observeIdle = (total) => {
-				const units = toUnits(total);
-				if (units === null) return;
-				const key = sessionKey();
-				let row = ledger[key];
-				if (!row || !Number.isFinite(row.baseUnits) || !Number.isFinite(row.costUnits)) {
-					// 第一次见到这个对话：基准取当前余额，花费记 0。这正是
-					// 「新开对话或此前没有此功能的显示为 0 元」。
-					row = ledger[key] = { baseUnits: units, costUnits: 0 };
-				} else {
-					const delta = row.baseUnits - units;
-					// 差值 > 0 才是消费；余额上升（充值）不作负向记账。
-					if (delta > 0) row.costUnits += delta;
-					row.baseUnits = units;
-				}
-				saveLedger();
+				const cost = sessionCost();
+				if (cost === null) return "本次 --";
+				return "本次 " + formatMoney(cost, "CNY");
 			};
 
 			/**
@@ -358,14 +401,20 @@ window.__ModuleLoader__.load({
 				if (panel === null) return;
 				const body = panel.querySelector(".dsh-tide-rows");
 				const note = panel.querySelector(".dsh-tide-note");
+				const cost = costView();
 				body.replaceChildren();
-				for (const [key, value, tone] of panelBody(state)) {
+				for (const [key, value, tone] of panelBody(state, cost)) {
 					const dt = document.createElement("dt");
 					dt.textContent = key;
 					const dd = document.createElement("dd");
 					dd.textContent = value;
 					if (tone === "warn") dd.style.color = "var(--dsw-alias-state-warn-primary)";
+					if (tone === "muted") dd.style.opacity = ".7";
 					body.append(dt, dd);
+				}
+				const pricing = panel.querySelector(".dsh-tide-pricing");
+				if (pricing !== null) {
+					pricing.textContent = pricingHint(cost.peak === true) + "不含子代理会话。";
 				}
 				const bal = state && state.balance;
 				if (bal && bal.ok && bal.source === "account") {
@@ -446,7 +495,8 @@ window.__ModuleLoader__.load({
 					'<button class="dsh-tide-refresh" type="button">刷新</button></div>' +
 					'<dl class="dsh-tide-rows"></dl>' +
 					'<div class="dsh-tide-note"></div>' +
-					'<div class="dsh-tide-foot">高峰：北京时间周一至周五 09:00–12:00、14:00–18:00（不含法定节假日）</div>';
+					'<div class="dsh-tide-foot">高峰：北京时间周一至周五 09:00–12:00、14:00–18:00（不含法定节假日）</div>' +
+					'<div class="dsh-tide-foot dsh-tide-pricing"></div>';
 				panel.querySelector(".dsh-tide-refresh").addEventListener("click", async () => {
 					applyState(await loadState(true));
 					fillPanel();
@@ -472,20 +522,38 @@ window.__ModuleLoader__.load({
 			});
 
 			/**
-			 * 把一份新状态交给芯片，并顺带记一笔账。
+			 * 把一份新的宿主状态交给芯片。
 			 *
-			 * 记账必须挂在这里而不是只挂在自动刷新上：只挂自动刷新的话，首次
-			 * 挂载与「打开面板时的刷新」都不会播种基准，于是新对话的「本次」要
-			 * 等第一次闲满才出现（实测就是这样）。三条路径都走这里。
+			 * 只负责时段/倒计时/余额；「本次」由用量投影单独驱动（见 __tideUsage），
+			 * 两者互不依赖 —— 余额接口挂了也不该让花费数字消失或归零。
 			 */
 			const applyState = (next) => {
-				if (next && next.balance && next.balance.ok === true) observeIdle(next.balance.total);
 				state = next;
 				render();
 			};
 
 			/** 供外部（自动刷新）把新数据交给这个芯片。 */
 			chip.__tideApply = (next) => applyState(next);
+
+			/**
+			 * 供 React 半边把**当前会话的用量快照**交给芯片。
+			 *
+			 * 会话切换时 slot 组件不会重挂，只有 props 变；把 sessionId 一起传进来，
+			 * 芯片才知道该读账本里的哪一行（旧实现靠嗅探「主视图持有的会话」，
+			 * 切走再切回就会把整段间隔的账户消耗记到旧对话头上）。
+			 */
+			chip.__tideUsage = (next) => {
+				if (next === null || typeof next !== "object") return;
+				const id = typeof next.sessionId === "string" && next.sessionId !== "" ? next.sessionId : null;
+				if (id === null) return;
+				sessionId = id;
+				observeUsage(id, next.buckets);
+				render();
+			};
+
+			// 芯片可能是重建的（切换会话时统计行被替换）：把最近一次用量补上，
+			// 否则要等下一次投影更新才会出现「本次」。
+			if (latestUsage !== null) chip.__tideUsage(latestUsage);
 
 			render();
 			tick = window.setInterval(render, TICK_MS);
@@ -519,7 +587,17 @@ window.__ModuleLoader__.load({
 				const list = sessions.list;
 				if (list === null || list === undefined || typeof list.getSnapshot !== "function") return false;
 				const snap = list.getSnapshot();
-				const rows = snap && Array.isArray(snap.sessions) ? snap.sessions : [];
+				if (snap === null || typeof snap !== "object") return false;
+				// 运行态在 byId[id].running 上；旧实现读 snap.sessions，在 DSH 0.2.x
+				// 上恒为空数组，于是「有会话在跑就不刷新」这层保护一直没生效。
+				const byId = snap.byId;
+				if (byId !== null && typeof byId === "object") {
+					for (const row of Object.values(byId)) {
+						if (row !== null && typeof row === "object" && row.running === true) return true;
+					}
+					return false;
+				}
+				const rows = Array.isArray(snap.sessions) ? snap.sessions : [];
 				return rows.some((r) => r && r.running === true);
 			} catch (err) {
 				return false;
@@ -565,8 +643,25 @@ window.__ModuleLoader__.load({
 			};
 		}
 
+		/** 最近一次收到的用量快照（会话 id + 四桶）。芯片重建时用它把账补上。 */
+		let latestUsage = null;
+
 		/** 无渲染占位：唯一职责是让芯片始终附着在原生统计行上。 */
-		function TideMount() {
+		function TideMount(props) {
+			const sessionId = props === null || props === undefined ? undefined : props.sessionId;
+			const useProjection = props === null || props === undefined ? undefined : props.useProjection;
+			// 会话级用量投影：原生「缓存命中」药丸读的也是它。取不到时保持
+			// undefined，芯片显示「本次 0¥」，时段与余额不受影响。
+			const usage = typeof useProjection === "function" ? useProjection("tokenUsage") : undefined;
+
+			react.useEffect(() => {
+				if (typeof sessionId !== "string" || sessionId === "") return undefined;
+				latestUsage = { sessionId, buckets: usage };
+				const chip = document.querySelector(".dsh-tide-badge");
+				if (chip !== null && typeof chip.__tideUsage === "function") chip.__tideUsage(latestUsage);
+				return undefined;
+			}, [sessionId, usage]);
+
 			react.useEffect(() => {
 				let teardown = null;
 				let scheduled = false;
@@ -576,7 +671,7 @@ window.__ModuleLoader__.load({
 					const row = statsRow();
 					if (row === null) return;
 					if (teardown !== null) teardown();
-					teardown = mountChip(row);
+					teardown = mountChip(row, latestUsage === null ? sessionId : latestUsage.sessionId);
 				};
 
 				const schedule = () => {

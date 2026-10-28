@@ -1,0 +1,7 @@
+# 上游 v0.2.3 的源码快照（本地对照用，不入库）
+_upstream-0.2.3/
+
+# 依赖与构建残留
+node_modules/
+*.log
+.DS_Store
