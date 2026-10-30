@@ -1,6 +1,6 @@
 {
   "name": "dsh-tide-badge",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "DSH 输入框下方的计费时段与余额药丸：常显账户余额与本次对话花费（按会话 token 用量 × 官方价目表估算）、峰价/谷价（含中国法定节假日与周末规则）、下一次切换倒计时（桌面端账号登录态优先，API Key 兜底）。",
   "type": "module",
   "main": "lib/index.js",

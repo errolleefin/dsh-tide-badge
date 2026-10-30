@@ -291,12 +291,13 @@ ok('点开面板：本次花费、逐桶用量都在', () => {
   assert.ok(map.has('计费时段'), '既有时段行应保留')
 })
 
-ok('面板脚注给出价目与「不含子代理」', () => {
+ok('面板脚注：只列当前档位单价，另起一行给档位与口径', () => {
   const { panel } = panelPairs()
-  const hint = panel.querySelector('.dsh-tide-pricing').textContent
-  assert.ok(hint.includes('当前按谷价计'), hint)
-  assert.ok(hint.includes('0.02→0.04'), hint)
-  assert.ok(hint.includes('不含子代理会话'), hint)
+  const prices = panel.querySelector('.dsh-tide-prices').textContent
+  const phase = panel.querySelector('.dsh-tide-phase').textContent
+  assert.equal(prices, 'deepseek-flash 价目（元/百万 token）：未命中 1 · 缓存命中 0.02 · 输出 4')
+  assert.equal(phase, '当前按谷价计 · 不含子代理会话')
+  assert.equal(prices.includes('→'), false, '价目行不应再出现谷→峰区间')
 })
 
 console.log('\n=== 没有用量投影时 ===')

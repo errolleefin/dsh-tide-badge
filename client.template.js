@@ -82,6 +82,10 @@ window.__ModuleLoader__.load({
 .dsh-tide-note:empty { display: none; }
 .dsh-tide-err { color: var(--dsw-alias-state-warn-primary); }
 .dsh-tide-foot { margin-top: 10px; color: var(--dsw-alias-label-secondary); opacity: .75; }
+/* 价目区：两行——当前档位单价 / 档位与口径。数值等宽，换档时数字不跳动。 */
+.dsh-tide-pricing { margin-top: 8px; }
+.dsh-tide-prices { font-variant-numeric: tabular-nums; }
+.dsh-tide-phase { margin-top: 2px; opacity: .9; }
 `;
 
 		/** 每页只注入一次样式表。 */
@@ -412,10 +416,10 @@ window.__ModuleLoader__.load({
 					if (tone === "muted") dd.style.opacity = ".7";
 					body.append(dt, dd);
 				}
-				const pricing = panel.querySelector(".dsh-tide-pricing");
-				if (pricing !== null) {
-					pricing.textContent = pricingHint(cost.peak === true) + "不含子代理会话。";
-				}
+				const prices = panel.querySelector(".dsh-tide-prices");
+				if (prices !== null) prices.textContent = pricingHint(cost.peak === true);
+				const phase = panel.querySelector(".dsh-tide-phase");
+				if (phase !== null) phase.textContent = pricingPhaseHint(cost.peak === true);
 				const bal = state && state.balance;
 				if (bal && bal.ok && bal.source === "account") {
 					note.textContent = "余额来自桌面端账号登录态";
@@ -496,7 +500,10 @@ window.__ModuleLoader__.load({
 					'<dl class="dsh-tide-rows"></dl>' +
 					'<div class="dsh-tide-note"></div>' +
 					'<div class="dsh-tide-foot">高峰：北京时间周一至周五 09:00–12:00、14:00–18:00（不含法定节假日）</div>' +
-					'<div class="dsh-tide-foot dsh-tide-pricing"></div>';
+					'<div class="dsh-tide-foot dsh-tide-pricing">' +
+					'<div class="dsh-tide-prices"></div>' +
+					'<div class="dsh-tide-phase"></div>' +
+					'</div>';
 				panel.querySelector(".dsh-tide-refresh").addEventListener("click", async () => {
 					applyState(await loadState(true));
 					fillPanel();
